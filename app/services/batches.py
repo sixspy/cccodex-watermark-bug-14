@@ -1,4 +1,4 @@
-from app.db import get_db
+from app.db import get_db, write_tx
 from app.services.errors import ServiceError
 
 
@@ -32,7 +32,7 @@ def stamp_batch(
     value = (watermark_value or "").strip()
     if not value:
         raise ServiceError("水印值不能为空")
-    with get_db(db_path) as conn:
+    with write_tx(db_path) as conn:
         batch = conn.execute(
             "SELECT * FROM run_batches WHERE id=?", (batch_id,)
         ).fetchone()
@@ -48,11 +48,13 @@ def stamp_batch(
         ).fetchone()
         if not tpl:
             raise ServiceError("无现行水印模板", 409)
-        conn.execute(
+        cur = conn.execute(
             "UPDATE run_batches SET status='已盖印', watermark_value=?, "
-            "stamped_at=datetime('now') WHERE id=?",
+            "stamped_at=datetime('now') WHERE id=? AND status='待盖印'",
             (value, batch_id),
         )
+        if cur.rowcount != 1:
+            raise ServiceError("批次状态已被他人改动，请刷新后重试", 409, reason_code="STAMPED_READONLY")
         row = conn.execute(
             "SELECT * FROM run_batches WHERE id=?", (batch_id,)
         ).fetchone()

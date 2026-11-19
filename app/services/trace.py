@@ -15,10 +15,20 @@ def trace_downstream(watermark_value: str, db_path: str | None = None) -> dict:
             raise ServiceError("未找到该水印值的盖印批次", 404)
         codes = [s["run_code"] for s in sources]
         placeholders = ",".join("?" for _ in codes)
-        edges = conn.execute(
-            f"SELECT * FROM lineage_edges WHERE upstream_run_code IN ({placeholders})",
+        raw_edges = conn.execute(
+            f"SELECT * FROM lineage_edges WHERE upstream_run_code IN ({placeholders}) "
+            "ORDER BY id",
             codes,
         ).fetchall()
+        # 同一条边只算一次：多源指向同一游时不得翻倍
+        seen_edges: set[tuple[str, str]] = set()
+        edges = []
+        for e in raw_edges:
+            key = (e["upstream_run_code"], e["downstream_run_code"])
+            if key in seen_edges:
+                continue
+            seen_edges.add(key)
+            edges.append(dict(e))
         down_codes = sorted({e["downstream_run_code"] for e in edges})
         downstream = []
         if down_codes:
@@ -33,6 +43,9 @@ def trace_downstream(watermark_value: str, db_path: str | None = None) -> dict:
         return {
             "watermark_value": value,
             "sources": [dict(s) for s in sources],
-            "edges": [dict(e) for e in edges],
+            "edges": edges,
             "downstream": downstream,
+            "source_count": len(sources),
+            "edge_count": len(edges),
+            "downstream_count": len(downstream),
         }
